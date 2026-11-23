@@ -278,7 +278,7 @@ enum DebugCatalog {
             payload: .permission(DebugPermission(
                 toolName: "Edit",
                 action: "edit",
-                resources: ["~/projects/better-focus-ide/Sources/BetterFocusIDE/Services/NotchService.swift"],
+                resources: ["/Users/dev/projects/better-focus-ide/Sources/BetterFocusIDE/Services/NotchService.swift"],
                 toolInput: ["file_path": "Sources/BetterFocusIDE/Services/NotchService.swift"]))),
         DebugScene(
             id: "permission.mcp",
