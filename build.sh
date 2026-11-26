@@ -69,7 +69,9 @@ fi
 # 先签资源包，再签外层。不要用 --deep，嵌套签名顺序反了会在别的机器上校验失败。
 echo "▸ Signing $APP_NAME.app (ad-hoc, no hardened runtime)..."
 NESTED_BUNDLE="$APP_DIR/Contents/Resources/$(basename "$RESOURCE_BUNDLE")"
-if [ -n "$RESOURCE_BUNDLE" ] && [ -d "$NESTED_BUNDLE" ]; then
+# SwiftPM 的资源目录只有图标和脚本，没有 Info.plist，不是可签名的 bundle。
+# 对它 codesign 会报 bundle format unrecognized，脚本在 set -e 下直接退出，外层 app 签不上。
+if [ -n "$RESOURCE_BUNDLE" ] && { [ -f "$NESTED_BUNDLE/Info.plist" ] || [ -f "$NESTED_BUNDLE/Contents/Info.plist" ]; }; then
     codesign --force --sign - "$NESTED_BUNDLE"
 fi
 codesign --force --sign - "$APP_DIR"

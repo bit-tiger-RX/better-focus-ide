@@ -15,10 +15,13 @@ import SwiftUI
 ///
 /// ```
 /// [Q] Qoder · 任务进度                     3 / 6  [pin]
-/// ▬▬▬▬▬▬  ▬▬▬▬▬▬  ▬▬▬▬▬▬  ──────  ──────  ──────
-/// ●  补充 hooks 模板 matcher                     2m 14s
+/// ▬▬▬▬▬▬  ▬▬▬▬▬▬  ▬▬▬▬▬▬  ≈≈≈≈≈≈  ──────  ──────
+/// ◌  补充 hooks 模板 matcher                     2m 14s
 ///    下一步  验证事件回传与断线重连
 /// ```
+///
+/// 实心段是已完成，流动高光的一段是正在进行，空段是未开始。
+/// 当前任务行左侧的弧线持续旋转，和这段高光是同一件事。
 ///
 /// 所有纵向度量来自 `TodoCardLayout`，`NotchService` 用同一个函数算窗口高度，
 /// 两侧不许各写一份魔数。
@@ -31,12 +34,18 @@ struct NotchTodoView: View {
     @ObservedObject private var settings = Settings.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// 当前段的呼吸相位（仅当前段使用；1.6s 一个来回，远低于 3Hz 闪烁阈值）。
-    @State private var breathing = false
+    /// 状态标记列宽。转圈与「下一步」箭头共用，两行正文才能对齐。
+    private static let markColumn: CGFloat = 11
 
     private var progress: TodoProgress { controller.progress }
     private var tint: Color { controller.provider.tint }
     private var inset: CGFloat { CGFloat(Settings.shared.cardInset) }
+
+    /// 系统「减少动态效果」或应用内「减弱动态效果」任一开启，就停掉扫光和转圈。
+    /// 进行中的段仍保留半透明填色，静止时也能和空段、实心段分开。
+    private var calmMotion: Bool {
+        reduceMotion || settings.reduceMotionResolved
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -66,8 +75,6 @@ struct NotchTodoView: View {
                    value: progress.segmentFills)
         .animation(.easeOut(duration: 0.22), value: progress.current?.id)
         .animation(.easeOut(duration: 0.22), value: progress.isFinished)
-        .onAppear(perform: startBreathing)
-        .onChange(of: reduceMotion) { startBreathing() }
     }
 
     // MARK: - 头部
@@ -133,18 +140,24 @@ struct NotchTodoView: View {
         .frame(height: TodoCardLayout.barHeight)
         .accessibilityElement()
         .accessibilityLabel("任务进度")
-        .accessibilityValue("\(progress.completed) / \(progress.total)")
+        .accessibilityValue(progress.current.map {
+            "\(progress.completed) / \(progress.total)，正在进行 \($0.content)"
+        } ?? "\(progress.completed) / \(progress.total)")
     }
 
     /// 单段：底轨 + 按比例填充的胶囊。
     ///
     /// 填充用真实宽度而非 `scaleEffect`——缩放会把胶囊两端压扁，6pt 高度上尤其明显。
     /// 宽度不足一个圆头时按最小可见宽度画，避免「完成了但看不见」。
+    ///
+    /// 进行中的段不靠整段变淡（那会和空段混在一起）。它铺一层半透明主题色，
+    /// 再让一条高光从左扫到右。实心段是已完成，空段是未开始。
     private func segment(fill: Double, width: CGFloat, isActive: Bool) -> some View {
         let clamped = min(1, max(0, fill))
         let filledWidth = clamped >= 1
             ? width
             : (clamped > 0 ? max(TodoCardLayout.barHeight, width * clamped) : 0)
+        let running = isActive && progress.current != nil && clamped < 0.999
         return ZStack(alignment: .leading) {
             Color.clear
                 .liquidGlass(.capsule, fallback: Color.white.opacity(0.12))
@@ -153,22 +166,22 @@ struct NotchTodoView: View {
                     .fill(tint.opacity(clamped >= 1 ? 1 : 0.85))
                     .frame(width: filledWidth)
             }
+            if running && filledWidth == 0 {
+                Capsule()
+                    .fill(tint.opacity(0.42))
+            }
+            if running && !calmMotion {
+                RunningSweep(width: width)
+            }
         }
         .frame(width: width, height: TodoCardLayout.barHeight)
-        // 正在进行的那一段轻微呼吸：它是「现在」的唯一指示物。
-        .opacity(isActive && !reduceMotion ? (breathing ? 1 : 0.55) : 1)
     }
 
     // MARK: - 当前 / 下一步
 
     private var currentRow: some View {
         HStack(spacing: 7) {
-            // 进行中小点（呼吸），与段条同步；无进行中项时退成未开始圆点。
-            Circle()
-                .fill(progress.current != nil ? AnyShapeStyle(tint)
-                      : AnyShapeStyle(.white.opacity(0.35)))
-                .frame(width: 5, height: 5)
-                .opacity(progress.current != nil && !reduceMotion ? (breathing ? 1 : 0.45) : 1)
+            statusMark
 
             Text(progress.current?.content ?? progress.next?.content ?? "准备中")
                 .font(.system(size: 12, weight: .medium))
@@ -190,12 +203,27 @@ struct NotchTodoView: View {
         .transition(.opacity.combined(with: .offset(y: 4)))
     }
 
+    /// 进行中画旋转弧线；还没有进行中的项时，退成空心圆点，表示未开始。
+    private var statusMark: some View {
+        Group {
+            if progress.current != nil {
+                RunningMark(tint: tint, animate: !calmMotion)
+            } else {
+                Circle()
+                    .strokeBorder(.white.opacity(0.35), lineWidth: 1)
+                    .frame(width: 5, height: 5)
+            }
+        }
+        .frame(width: Self.markColumn, height: Self.markColumn)
+        .accessibilityHidden(true)
+    }
+
     private var nextRow: some View {
         HStack(spacing: 7) {
             Image(systemName: "arrow.turn.down.right")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.28))
-                .frame(width: 5)
+                .frame(width: Self.markColumn)
             Text("下一步")
                 .font(.system(size: 10))
                 .foregroundStyle(.white.opacity(0.35))
@@ -216,6 +244,7 @@ struct NotchTodoView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(tint)
                 .symbolEffect(.bounce, value: progress.isFinished)
+                .frame(width: Self.markColumn)
             Text(progress.total == 1 ? "任务已完成" : "全部 \(progress.total) 项已完成")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.9))
@@ -242,18 +271,90 @@ struct NotchTodoView: View {
         if minutes < 60 { return String(format: "%dm %02ds", minutes, rest) }
         return String(format: "%dh %02dm", minutes / 60, minutes % 60)
     }
+}
 
-    // MARK: - 呼吸
+// MARK: - 进行中指示
 
-    private func startBreathing() {
-        guard !reduceMotion else {
-            breathing = false
-            return
+/// 当前任务行左侧的旋转弧线。
+///
+/// 用时间相位而不是 `repeatForever`：卡片被收起再展开时，动画从当前时刻接上，
+/// 不会每次出现都从 0° 重播一遍。减弱动态效果时停在固定角度。
+private struct RunningMark: View {
+    var tint: Color
+    var animate: Bool
+
+    var body: some View {
+        Group {
+            if animate {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                    mark(angle: Self.angle(at: context.date))
+                }
+            } else {
+                mark(angle: -90)
+            }
         }
-        breathing = false
-        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
-            breathing = true
+        .frame(width: 11, height: 11)
+    }
+
+    private func mark(angle: Double) -> some View {
+        ZStack {
+            Circle()
+                .stroke(tint.opacity(0.28), lineWidth: 1.4)
+            Circle()
+                .trim(from: 0.12, to: 0.42)
+                .stroke(tint, style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                .rotationEffect(.degrees(angle))
         }
+    }
+
+    /// 0.9 秒转一圈。减去 90° 让开口从正上方开始。
+    static func angle(at date: Date) -> Double {
+        let period = 0.9
+        let phase = date.timeIntervalSinceReferenceDate
+            .truncatingRemainder(dividingBy: period) / period
+        return phase * 360 - 90
+    }
+}
+
+/// 进行中那一段上的扫光。
+///
+/// 高光两端透明，扫出胶囊之后再从左侧进入，接缝处看不见跳跃。
+/// 只裁扫光本身，不裁父层的液态玻璃棱边。
+private struct RunningSweep: View {
+    var width: CGFloat
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            let phase = Self.phase(at: context.date)
+            let band = Self.bandWidth(segment: width)
+            Capsule()
+                .fill(LinearGradient(
+                    colors: [
+                        Color.white.opacity(0),
+                        Color.white.opacity(0.92),
+                        Color.white.opacity(0),
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing))
+                .frame(width: band, height: TodoCardLayout.barHeight)
+                .offset(x: -band + (width + band) * phase)
+                .frame(width: width, height: TodoCardLayout.barHeight, alignment: .leading)
+        }
+        .clipShape(Capsule())
+        .allowsHitTesting(false)
+    }
+
+    /// 1.1 秒从左扫到右，低于 3Hz。
+    static func phase(at date: Date) -> Double {
+        let period = 1.1
+        return date.timeIntervalSinceReferenceDate
+            .truncatingRemainder(dividingBy: period) / period
+    }
+
+    /// 高光宽度跟着段宽走，但不超过段宽的七成，窄段上仍能看出它在移动。
+    static func bandWidth(segment width: CGFloat) -> CGFloat {
+        let preferred = max(TodoCardLayout.barHeight * 2.2, width * 0.42)
+        return min(width * 0.72, preferred)
     }
 }
 
