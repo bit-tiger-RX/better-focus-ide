@@ -32,9 +32,18 @@ final class TodoController: ObservableObject {
     ///
     /// 手动停止 Qoder/Claude 等宿主的 session 时，它们**不触发任何 hook 事件**
     /// （无 Stop / SessionEnd / PostToolUseFailure），岛侧永远收不到清空信号。
-    /// 唯一可靠的兜底是「长时间没新事件就自动收起」——这里记录最后一次写入时刻，
-    /// 供 `NotchService` 的陈旧卡片清扫据此判定。
+    /// 兜底是「长时间没新事件就收起」——这里记录最后一次写入时刻。
+    ///
+    /// 进行中的列表不能按设置里较短的秒数直接 `reset()`：一条任务经常要几分钟
+    /// 才回写下一条状态。列表一旦被丢掉，随后的 `todo_item_updated` 只带刚变化的
+    /// 几条（常见是「刚完成」+「下一条进行中」），总数就从 11 塌成 2。
     @Published private(set) var lastUpdateAt = Date()
+
+    /// 闲置收起时封存的整表。同一会话的下一次增量更新先解封再 UPSERT。
+    private var suspended: SuspendedList?
+
+    /// 进行中列表允许闲置清空的最短时间。短于它的设置值一律抬到这里。
+    static let inProgressIdleFloor: TimeInterval = 30 * 60
 
     /// 变化计数：供 `NotchService` 判断是否需要重新计算窗口尺寸。
     @Published private(set) var revision: Int = 0
@@ -56,6 +65,8 @@ final class TodoController: ObservableObject {
         adopt(sessionID: sessionID, provider: provider,
               providerName: providerName, project: project)
         guard !snapshot.isEmpty else { return }
+        // 整表是权威快照，封存的旧列表不能再被下一次增量解封回来。
+        suspended = nil
         items = snapshot
         refreshLifecycle()
     }
@@ -73,6 +84,7 @@ final class TodoController: ObservableObject {
     /// 原地更新并回填真实 id。
     func upsert(_ item: TodoItem, sessionID: String, provider: AgentProvider,
                 providerName: String, project: String) {
+        restoreSuspended(for: sessionID)
         adopt(sessionID: sessionID, provider: provider,
               providerName: providerName, project: project)
         if item.status == .cancelled {
@@ -95,6 +107,7 @@ final class TodoController: ObservableObject {
     /// 全量校正（宿主偶尔会回一条完整列表，例如 `TaskList`）。
     func replaceAll(_ list: [TodoItem]) {
         guard !list.isEmpty else { return }
+        suspended = nil
         items = list
         refreshLifecycle()
     }
@@ -125,6 +138,7 @@ final class TodoController: ObservableObject {
                        providerName: String, project: String) {
         if !self.sessionID.isEmpty, self.sessionID != sessionID {
             items = []
+            suspended = nil
             finishedAt = nil
             startedAt = Date()
         }
@@ -154,7 +168,8 @@ final class TodoController: ObservableObject {
     // MARK: - 清理
 
     func reset() {
-        guard !items.isEmpty || !sessionID.isEmpty else { return }
+        guard !items.isEmpty || !sessionID.isEmpty || suspended != nil else { return }
+        suspended = nil
         items = []
         sessionID = ""
         project = ""
@@ -185,4 +200,46 @@ final class TodoController: ObservableObject {
         guard hasTodo else { return false }
         return Date().timeIntervalSince(lastUpdateAt) >= interval
     }
+
+    /// 实际用于清扫的闲置时长。
+    ///
+    /// 全部完成沿用设置值。进行中至少 `inProgressIdleFloor`（30 分钟）：
+    /// 设置里的 60 秒会在第二条任务还在做时把卡片收掉。
+    static func idleClearInterval(configured: TimeInterval, inProgress: Bool) -> TimeInterval {
+        let configured = max(3, configured)
+        guard inProgress else { return configured }
+        return max(configured, inProgressIdleFloor)
+    }
+
+    /// 提问 / 权限卡还在等用户时调用：这段时间没有 todo 回写是正常的，不能算闲置。
+    func noteActivity() {
+        guard hasTodo else { return }
+        lastUpdateAt = Date()
+    }
+
+    /// 闲置过久时收起卡片，但把整表留下。
+    ///
+    /// 可见列表清空，进度线和卡片都会撤下。同一会话的下一次
+    /// `todo_item_updated` 经 `upsert` 先解封再合并，总数不会塌成这次带回的条数。
+    func suspendForIdle() {
+        guard hasTodo else { return }
+        suspended = SuspendedList(sessionID: sessionID, items: items)
+        items = []
+        finishedAt = nil
+        revision &+= 1
+        lastUpdateAt = Date()
+    }
+
+    /// 同一会话的增量更新到达时，把闲置前的整表放回去。
+    private func restoreSuspended(for sessionID: String) {
+        guard items.isEmpty, let suspended, suspended.sessionID == sessionID else { return }
+        items = suspended.items
+        self.suspended = nil
+    }
+}
+
+/// 闲置收起时记住的整表。只在同一 `sessionID` 的下一次增量写入时解封。
+private struct SuspendedList {
+    var sessionID: String
+    var items: [TodoItem]
 }

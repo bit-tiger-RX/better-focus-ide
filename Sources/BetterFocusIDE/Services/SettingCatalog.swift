@@ -391,9 +391,17 @@ enum SettingCatalog {
             note: "挂了「Hook 时限 + 本宽限」仍没人等的卡片会被收掉", advanced: true,
             defaultValue: .int(45), get: getI(\.sweepGrace), set: setI(\.sweepGrace)),
         SettingDefinition(key: "todoIdleTimeout", label: "待办无新事件自动收起", kind: .slider, group: "超时与排队",
-            min: 10, max: 600, step: 5, unit: "秒", digits: 0,
-            note: "手动中断 session 后不会再有 hook 事件，超时自动清掉岛上的任务进度", advanced: true,
-            defaultValue: .int(60), get: getI(\.todoIdleTimeout), set: setI(\.todoIdleTimeout)),
+            min: 30, max: 120, step: 5, unit: "分钟", digits: 0,
+            note: "手动中断后多久清掉岛上的进度。进行中至少 30 分钟：一条任务经常要几分钟才回写，更短会把整表丢掉，下次只剩刚完成的那条和正在做的那条，总数变成 2",
+            advanced: true,
+            keywords: ["待办", "超时", "进度", "todo", "闲置"],
+            defaultValue: .int(30),
+            get: { .int(max(1, Settings.shared.todoIdleTimeout / 60)) },
+            set: { if case .int(let minutes) = $0 {
+                let floor = Int(TodoController.inProgressIdleFloor / 60)
+                Settings.shared.todoIdleTimeout = max(floor, minutes) * 60
+                Settings.shared.markChanged()
+            } }),
     ]
 
     /// 按 key 查找设置项定义。

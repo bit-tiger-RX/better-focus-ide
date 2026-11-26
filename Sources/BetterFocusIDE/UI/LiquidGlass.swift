@@ -39,13 +39,30 @@ private struct LiquidGlassPlate: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        #if BETTERFOCUS_HAS_GLASS_SDK
         if #available(macOS 26, *) {
             glassed(content)
         } else {
             legacy(content)
         }
+        #else
+        legacy(content)
+        #endif
     }
 
+    @ViewBuilder
+    private func legacy(_ content: Content) -> some View {
+        switch shape {
+        case .rounded(let radius):
+            content.background(fallback, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+        case .capsule:
+            content.background(fallback, in: Capsule(style: .continuous))
+        case .circle:
+            content.background(fallback, in: Circle())
+        }
+    }
+
+    #if BETTERFOCUS_HAS_GLASS_SDK
     @available(macOS 26, *)
     @ViewBuilder
     private func glassed(_ content: Content) -> some View {
@@ -61,18 +78,6 @@ private struct LiquidGlassPlate: ViewModifier {
         }
     }
 
-    @ViewBuilder
-    private func legacy(_ content: Content) -> some View {
-        switch shape {
-        case .rounded(let radius):
-            content.background(fallback, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-        case .capsule:
-            content.background(fallback, in: Capsule(style: .continuous))
-        case .circle:
-            content.background(fallback, in: Circle())
-        }
-    }
-
     @available(macOS 26, *)
     private static func glass(variant: LiquidGlassVariant, tint: Color?, interactive: Bool) -> Glass {
         var glass: Glass = variant == .clear ? .clear : .regular
@@ -84,6 +89,7 @@ private struct LiquidGlassPlate: ViewModifier {
         }
         return glass
     }
+    #endif
 }
 
 /// 把一张卡片里的多块玻璃收成一次绘制。间距 0 只做合批，不把相邻选项行融成一块。
@@ -92,6 +98,7 @@ private struct LiquidGlassGroup: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        #if BETTERFOCUS_HAS_GLASS_SDK
         if #available(macOS 26, *) {
             GlassEffectContainer(spacing: spacing) {
                 content
@@ -99,6 +106,9 @@ private struct LiquidGlassGroup: ViewModifier {
         } else {
             content
         }
+        #else
+        content
+        #endif
     }
 }
 

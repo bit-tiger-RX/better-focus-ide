@@ -154,10 +154,12 @@ final class Settings: ObservableObject {
     @Published var permissionQueueLimit = 8
     @Published var sweepInterval = 15
     @Published var sweepGrace = 45
-    /// 任务进度卡片「无新事件自动收起」的秒数：手动停止宿主 session 后不再有
-    /// hook 事件，靠这条兜底清掉残留进度。必须足够长，否则 Agent 正常执行中
-    /// 的任务间隔（思考/执行工具，常 10~60s）会被误判成「无进展」而清空。
-    @Published var todoIdleTimeout = 60
+    /// 任务进度卡片「无新事件自动收起」的秒数。手动停止宿主 session 后不再有
+    /// hook 事件，靠这条兜底清掉残留进度。
+    ///
+    /// 进行中的列表实际不会短于 `TodoController.inProgressIdleFloor`（30 分钟）。
+    /// 一条任务本身就常常超过一分钟才回写；按 60 秒清空会把整表丢掉。
+    @Published var todoIdleTimeout = Int(TodoController.inProgressIdleFloor)
 
     /// 可选的系统提示音（名字，展示标签）。
     static let soundChoices: [(String, String)] = [
@@ -321,7 +323,8 @@ final class Settings: ObservableObject {
         permissionQueueLimit = v["permissionQueueLimit"]?.intValue ?? permissionQueueLimit
         sweepInterval = v["sweepInterval"]?.intValue ?? sweepInterval
         sweepGrace = v["sweepGrace"]?.intValue ?? sweepGrace
-        todoIdleTimeout = v["todoIdleTimeout"]?.intValue ?? todoIdleTimeout
+        let storedIdle = v["todoIdleTimeout"]?.intValue ?? todoIdleTimeout
+        todoIdleTimeout = max(storedIdle, Int(TodoController.inProgressIdleFloor))
     }
 
     /// 把所有 @Published 字段序列化进 values 并原子写盘。
@@ -494,7 +497,7 @@ final class Settings: ObservableObject {
         questionHold = true; permissionHold = true
         agentWaitLimit = 600; questionQueueLimit = 8; permissionQueueLimit = 8
         sweepInterval = 15; sweepGrace = 45
-        todoIdleTimeout = 60
+        todoIdleTimeout = Int(TodoController.inProgressIdleFloor)
         markChanged()
         save()
     }

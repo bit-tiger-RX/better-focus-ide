@@ -1504,31 +1504,46 @@ final class NotchService: ObservableObject {
     /// （无 Stop / SessionEnd / PostToolUseFailure），岛侧收不到清空信号，
     /// 进度会一直挂在岛上。唯一可靠的兜底是「长时间没新事件就自动收起」。
     ///
-    /// 周期取 `todoIdleTimeout` 的一半（至少 1s），保证判定滞后不超过 1~2 秒，
-    /// 而不是等到几十秒一次的常规清扫才轮到。
+    /// 巡检最多 30 秒一轮。阈值本身可以是 30 分钟，不能把轮询间隔也拉到一半那么长。
     private var todoIdleTimer: Timer?
 
     private func restartTodoIdleTimer() {
         todoIdleTimer?.invalidate()
         let timeout = max(3, Settings.shared.todoIdleTimeout)
-        let interval = TimeInterval(max(1, timeout / 2))
+        let interval = TimeInterval(min(30, max(1, timeout / 2)))
         todoIdleTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.sweepIdleTodo()
         }
         if let timer = todoIdleTimer { RunLoop.main.add(timer, forMode: .common) }
     }
 
-    /// 若任务进度已超过 `todoIdleTimeout` 秒没有新事件，则清空。
+    /// 长时间没有新的待办事件时收起进度。
     ///
+    /// 进行中的列表至少留 30 分钟，并且收起时封存整表而不是 `reset()`。
+    /// 一条任务经常要几分钟才回写状态；60 秒就清空的话，下一次
+    /// `todo_item_updated` 只带「刚完成」和「下一条」，总数从 11 塌成 2。
+    /// 提问 / 权限还占着岛时刷新活动时钟，这段等待不算闲置。
     /// 进度可能只是别的卡片底边的一条线（`activeCard` 不是 `.todo`），
-    /// 这种时候只清数据，不把正在看的通知 / 提问 / 权限一起收掉。
+    /// 这种时候只动待办数据，不把正在看的通知 / 提问 / 权限一起收掉。
     private func sweepIdleTodo() {
         guard todoController.hasTodo else { return }
-        let timeout = TimeInterval(max(3, Settings.shared.todoIdleTimeout))
+        if questionController.hasActiveCard || permissionController.hasActiveCard {
+            todoController.noteActivity()
+            return
+        }
+        let timeout = TodoController.idleClearInterval(
+            configured: TimeInterval(Settings.shared.todoIdleTimeout),
+            inProgress: !todoController.progress.isFinished)
         guard todoController.shouldDismissIdle(after: timeout) else { return }
-        Log.info("待办 \(timeout)s 无新事件，兜底清空收起", topic: "todo")
+        let total = todoController.progress.total
         let showingTodo = activeCard == .todo
-        todoController.reset()
+        if todoController.progress.isFinished {
+            Log.info("待办 \(Int(timeout))s 无新事件，清空已完成的 \(total) 项", topic: "todo")
+            todoController.reset()
+        } else {
+            Log.info("待办 \(Int(timeout))s 无新事件，收起并保留 \(total) 项", topic: "todo")
+            todoController.suspendForIdle()
+        }
         if showingTodo { handleCardDismissal() }
     }
 }

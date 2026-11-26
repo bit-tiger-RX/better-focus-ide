@@ -109,10 +109,12 @@ private final class PassthroughView: NSView {
 }
 
 /// 岛面玻璃不参与点击。交互玻璃会把第一下点击收走做高光，气泡就要再点一次才展开或收起。
+#if BETTERFOCUS_HAS_GLASS_SDK
 @available(macOS 26, *)
 private final class IslandGlassView: NSGlassEffectView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
+#endif
 
 /// 窗口的内容视图。一层被裁成灵动岛轮廓的岛底、一层在卡片展开时出现的玻璃
 /// （macOS 26+ 为 `NSGlassEffectView`，更早系统为 `NSVisualEffectView`）、
@@ -212,12 +214,15 @@ final class NotchCanvas: NSView {
 
     /// 当前系统能否用原生液态玻璃。卡片控件侧的判断在 `LiquidGlassPlate`。
     private var usesLiquidGlass: Bool {
+        #if BETTERFOCUS_HAS_GLASS_SDK
         if #available(macOS 26, *) { return true }
+        #endif
         return false
     }
 
     /// 构建展开卡片的玻璃层。macOS 26+ 用系统液态玻璃，否则退回 `.hudWindow` 磨砂。
     private static func makeGlass() -> NSView {
+        #if BETTERFOCUS_HAS_GLASS_SDK
         if #available(macOS 26, *) {
             let liquid = IslandGlassView()
             // clear 才能看见背后画面在棱边上的扭曲。regular 在这块透明高窗里
@@ -243,6 +248,7 @@ final class NotchCanvas: NSView {
             }
             return liquid
         }
+        #endif
         let glass = NSVisualEffectView()
         glass.material = .hudWindow
         glass.blendingMode = .behindWindow
@@ -419,6 +425,7 @@ final class NotchCanvas: NSView {
     /// `moving` 为真时洗色用半分辨率、按约 24pt 量化，避免弹簧每帧重跑整张位图。
     /// `radius` 来自肩线内侧的可见玻璃框。
     private func updateLiquidCorner(moving: Bool, radius: CGFloat) {
+        #if BETTERFOCUS_HAS_GLASS_SDK
         guard #available(macOS 26, *), let liquid = glass as? NSGlassEffectView else { return }
         if liquid.cornerRadius != radius {
             liquid.cornerRadius = radius
@@ -448,6 +455,10 @@ final class NotchCanvas: NSView {
         wash.frame = CGRect(x: 0, y: lift, width: b.width, height: max(0, b.height - lift))
         applyFeatheredWash(to: wash, radius: radius, moving: moving)
         syncEarCap()
+        #else
+        _ = moving
+        _ = radius
+        #endif
     }
 
     /// 耳朵盖在透镜上沿，底下渐隐，避免透镜顶边和耳朵底边各留一条横线。
@@ -468,6 +479,7 @@ final class NotchCanvas: NSView {
 
     /// 耳朵只补材质，不要自己的圆角和羽化洗色，否则会在肩线里再切出一条棱。
     private func syncEarCap() {
+        #if BETTERFOCUS_HAS_GLASS_SDK
         guard #available(macOS 26, *), let liquid = earCap as? NSGlassEffectView else { return }
         if liquid.cornerRadius != 0 { liquid.cornerRadius = 0 }
         let style: NSGlassEffectView.Style = Settings.shared.glassStyle == "regular" ? .regular : .clear
@@ -484,6 +496,7 @@ final class NotchCanvas: NSView {
             liquid.effectIsInteractive = false
         }
         liquid.contentView?.subviews.first { $0.identifier == Self.washIdentifier }?.isHidden = true
+        #endif
     }
 
     /// 把羽化洗色写进洗色视图的 `layer.contents`。
